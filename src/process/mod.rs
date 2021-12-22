@@ -1,12 +1,11 @@
-use anyhow::Result;
 use std::{mem, ptr};
 use winapi::shared::ntdef::HANDLE;
-use winapi::um::memoryapi::{ReadProcessMemory, WriteProcessMemory};
-use winapi::shared::minwindef::{FALSE, LPCVOID, LPVOID, BOOL, PBOOL};
+use winapi::um::memoryapi::{ReadProcessMemory, WriteProcessMemory, VirtualFreeEx, VirtualAllocEx, VirtualProtectEx};
+use winapi::shared::minwindef::{FALSE, LPCVOID, LPVOID, BOOL, PBOOL, DWORD, PDWORD};
 use winapi::shared::basetsd::SIZE_T;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::processthreadsapi::OpenProcess;
-use winapi::um::winnt::PROCESS_ALL_ACCESS;
+use winapi::um::winnt::{PROCESS_ALL_ACCESS, MEM_RELEASE, MEM_COMMIT, MEM_RESERVE};
 use winapi::um::wow64apiset::IsWow64Process;
 use winapi::um::tlhelp32::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS, CreateToolhelp32Snapshot};
 
@@ -55,6 +54,32 @@ impl Process {
                 mem::size_of::<T>() as SIZE_T,
                 ptr::null_mut::<SIZE_T>(),
             ) != FALSE
+        }
+    }
+
+    pub fn alloc(&self,size: usize, protection: DWORD) -> Option<usize> {
+        let buffer = unsafe { VirtualAllocEx(self.handle,ptr::null_mut(),size,MEM_RESERVE | MEM_COMMIT,protection) };
+        return if buffer.is_null() {
+            None
+        } else {
+            Some(buffer as usize)
+        }
+    }
+
+    pub fn free(&self,address: usize) -> bool {
+        match unsafe { VirtualFreeEx(self.handle,address as LPVOID, 0 as SIZE_T,MEM_RELEASE)} {
+            FALSE => {
+                false
+            },
+            _ => true,
+        }
+    }
+
+    pub fn protect(&self,address: usize,size: usize,protection: DWORD) -> Option<DWORD> {
+        let mut tmp: DWORD = 0;
+        match unsafe { VirtualProtectEx(self.handle,address as LPVOID,size,protection,&mut tmp as PDWORD)} {
+            FALSE => None,
+            _ => Some(tmp)
         }
     }
 }
