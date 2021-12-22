@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
+anyhow = "1.0.50"
 winapi = { version = "0.3.8", features = ["basetsd", "handleapi", "memoryapi", "minwindef", "ntdef", "processthreadsapi", "tlhelp32", "winnt", "wow64apiset"]}
+hex = "0.4.3"
