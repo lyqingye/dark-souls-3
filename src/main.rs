@@ -1,18 +1,18 @@
 extern crate winapi;
 
-use winapi::shared::ntdef::HANDLE;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::winnt::{PAGE_EXECUTE_READWRITE, PAGE_READWRITE};
-
 pub mod error;
 pub mod overlay;
 pub mod process;
+pub mod game;
 
 fn main() {
-    overlay::Overlay::new(0x00040AF2)
+    let mut game_data = game::GameData::init().unwrap();
+    game_data.refresh_world_char_man_data().unwrap();
+    println!("{:#?}",game_data);
+    overlay::Overlay::new(0x001506C6)
         .unwrap()
-        .run_loop(&|s| {
-
+        .run_loop(|s| {
+            s.draw_text("hello".to_owned(),0.0,0.0);
         })
         .unwrap();
 }
