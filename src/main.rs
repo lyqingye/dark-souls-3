@@ -9,8 +9,10 @@ pub mod overlay;
 pub mod process;
 
 fn main() {
-    overlay::Overlay::new(0x00190830)
+    overlay::Overlay::new(0x00040AF2)
         .unwrap()
-        .run_loop()
+        .run_loop(&|s| {
+
+        })
         .unwrap();
 }

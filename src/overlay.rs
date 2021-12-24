@@ -6,11 +6,8 @@ use windows::core::*;
 use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::{DXGI_STATUS_OCCLUDED, HINSTANCE};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, PSTR, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_ALPHA_MODE_STRAIGHT,
-    D2D1_ALPHA_MODE_UNKNOWN, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F,
-};
-use windows::Win32::Graphics::Direct2D::{D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_BRUSH_PROPERTIES, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_TRIANGLE, D2D1_DEBUG_LEVEL_INFORMATION, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_STROKE_STYLE_PROPERTIES, D2D1_UNIT_MODE_DIPS, D2D1_DIRECTIONALBLUR_OPTIMIZATION_QUALITY};
+use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_ALPHA_MODE_STRAIGHT, D2D1_ALPHA_MODE_UNKNOWN, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_SIZE_U};
+use windows::Win32::Graphics::Direct2D::{D2D1CreateFactory, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1, ID2D1SolidColorBrush, ID2D1StrokeStyle, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_BRUSH_PROPERTIES, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_TRIANGLE, D2D1_DEBUG_LEVEL_INFORMATION, D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_STROKE_STYLE_PROPERTIES, D2D1_UNIT_MODE_DIPS, D2D1_DIRECTIONALBLUR_OPTIMIZATION_QUALITY, D2D1_RENDER_TARGET_PROPERTIES, D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_PRESENT_OPTIONS_IMMEDIATELY, ID2D1HwndRenderTarget, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, D3D11_CREATE_DEVICE_DEBUG, D3D11_CREATE_DEVICE_SINGLETHREADED};
 use windows::Win32::Graphics::DirectWrite::{
@@ -41,16 +38,14 @@ pub struct Overlay {
     overlay: HWND,
 
     factory: Option<ID2D1Factory1>,
-    dx_factory: Option<IDXGIFactory2>,
     dw_factory: Option<IDWriteFactory1>,
-    dx_context: Option<ID2D1DeviceContext>,
-    swap_chain: Option<IDXGISwapChain1>,
+    render_target: Option<ID2D1HwndRenderTarget>,
 
     // cached resource
     stroke: Option<ID2D1StrokeStyle>,
     brush: Option<ID2D1SolidColorBrush>,
     dw_text_format: Option<IDWriteTextFormat>,
-
+    render_fn: Option<Box<&'static dyn FnMut(&mut Overlay)>>,
     dpi: f32,
     frequency: i64,
     occlusion: u32,
@@ -98,24 +93,24 @@ impl Overlay {
 
     /// Begin drawing loop
     fn draw(&mut self) -> Result<()> {
-        self.begin_drawing()?;
+        {
+            self.begin_drawing()?;
+        }
 
-        //
         unsafe {
-            let ctx = self.dx_context.as_ref().unwrap();
+            let ctx = self.render_target.as_ref().unwrap();
             ctx.Clear(&D2D1_COLOR_F {
                 r: 0.0,
                 g: 0.0,
                 b: 0.0,
-                a: 1.0,
+                a: 0.0,
             });
-            ctx.DrawLine(
-                D2D_POINT_2F { x: 0.0, y: 0.0 },
-                D2D_POINT_2F { x: 50.0, y: 50.0 },
-                self.brush.as_ref().unwrap(),
-                2.0,
-                self.stroke.as_ref().unwrap(),
-            );
+
+            let f = self.render_fn.as_ref().unwrap();
+
+            // if let Some(f) = f_opt {
+            //     f(self);
+            // }
         };
         self.end_drawing()
     }
@@ -123,12 +118,11 @@ impl Overlay {
     /// Set up drawing
     fn begin_drawing(&mut self) -> Result<()> {
         self.ensure_position();
-        if self.dx_context.is_none() {
+        if self.render_target.is_none() {
             self.init_dx()?;
-            self.create_swap_chain_bitmap()?;
         }
         unsafe {
-            self.dx_context.as_ref().unwrap().BeginDraw();
+            self.render_target.as_ref().unwrap().BeginDraw();
         }
         Ok(())
     }
@@ -136,26 +130,16 @@ impl Overlay {
     /// Finish up drawing
     fn end_drawing(&mut self) -> Result<()> {
         unsafe {
-            self.dx_context
+            self.render_target
                 .as_ref()
                 .unwrap()
                 .EndDraw(std::ptr::null_mut(), std::ptr::null_mut())?;
         }
-        if let Err(error) = self.present(1, 0) {
-            if error.code() != DXGI_STATUS_OCCLUDED {
-                self.release_device();
-            }
-        }
         Ok(())
     }
 
-    fn present(&self, sync: u32, flags: u32) -> Result<()> {
-        unsafe { self.swap_chain.as_ref().unwrap().Present(sync, flags) }
-    }
-
     fn release_device(&mut self) {
-        self.dx_context = None;
-        self.swap_chain = None;
+        self.render_target = None;
     }
 
     /// Get rectangle of target window
@@ -181,10 +165,8 @@ impl Overlay {
             target,
             overlay: 0,
             factory: None,
-            dx_factory: None,
             dw_factory: None,
-            dx_context: None,
-            swap_chain: None,
+            render_target: None,
             stroke: None,
             brush: None,
             dw_text_format: None,
@@ -192,10 +174,11 @@ impl Overlay {
             frequency: 0,
             occlusion: 0,
             visible: false,
+            render_fn: None,
         })
     }
 
-    pub fn run_loop(&mut self) -> Result<()> {
+    pub fn run_loop<F: FnMut(&mut Overlay) + 'static>(&mut self, render_fn:&'static F) -> Result<()>  {
         let instance = unsafe { GetModuleHandleA(None) };
         let mut wc = WNDCLASSEXA {
             cbSize: std::mem::size_of::<WNDCLASSEXA>() as u32,
@@ -269,6 +252,7 @@ impl Overlay {
             // show our window
             ShowWindow(window, SW_SHOW);
         }
+        self.render_fn = Some(Box::new(render_fn));
 
         let mut message = MSG::default();
         unsafe {
@@ -294,23 +278,8 @@ impl Overlay {
                 }
                 WM_SIZE => {
                     if wparam != SIZE_MINIMIZED as usize {
-                        // TODO resize swap chain bitmap
+                        self.release_device();
                     }
-                    0
-                }
-                WM_USER => {
-                    if self.present(0, DXGI_PRESENT_TEST).is_ok() {
-                        self.dx_factory
-                            .as_ref()
-                            .unwrap()
-                            .UnregisterOcclusionStatus(self.occlusion);
-                        self.occlusion = 0;
-                        self.visible = true;
-                    }
-                    0
-                }
-                WM_ACTIVATE => {
-                    self.visible = true;
                     0
                 }
                 WM_DISPLAYCHANGE => {
@@ -343,6 +312,33 @@ impl Overlay {
             )?
         }
         let d2d_factory = d2d_factory_opt.unwrap();
+        let mut dpi_x: f32 = 0.0;
+        let mut dpi_y: f32 = 0.0;
+        unsafe {d2d_factory.GetDesktopDpi(&mut dpi_x, &mut dpi_y)};
+
+        let rt_props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            pixelFormat: D2D1_PIXEL_FORMAT{
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED
+            },
+            dpiX: dpi_x,
+            dpiY: dpi_y,
+            usage: 0,
+            minLevel: 0
+        };
+
+        let rect = self.get_rect();
+        let hw_rt_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd: window,
+            pixelSize: D2D_SIZE_U {
+                width: (rect.right - rect.left) as u32,
+                height: (rect.bottom - rect.top)  as u32
+            },
+            presentOptions: D2D1_PRESENT_OPTIONS_IMMEDIATELY
+        };
+        let render_target: ID2D1HwndRenderTarget = unsafe {d2d_factory.CreateHwndRenderTarget(&rt_props,&hw_rt_props)?};
+        unsafe {render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);}
 
         let dw_factory: IDWriteFactory1 = unsafe {
             DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, &IDWriteFactory1::IID)
@@ -356,55 +352,6 @@ impl Overlay {
         };
 
         let stroke_style = unsafe { d2d_factory.CreateStrokeStyle(&props, std::ptr::null(), 0)? };
-        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_DEBUG;
-        let mut device_opt: Option<ID3D11Device> = None;
-        let mut device: ID3D11Device;
-        let context: ID2D1DeviceContext;
-        let dxgi_factory: IDXGIFactory2;
-        let swap_chain: IDXGISwapChain1;
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HINSTANCE::default(),
-                flags,
-                std::ptr::null(),
-                0,
-                D3D11_SDK_VERSION,
-                &mut device_opt,
-                std::ptr::null_mut(),
-                &mut None,
-            )?;
-            device = device_opt.unwrap();
-
-            let d2device: ID2D1Device = d2d_factory.CreateDevice(device.cast::<IDXGIDevice>()?)?;
-            context = d2device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
-            context.SetUnitMode(D2D1_UNIT_MODE_DIPS);
-
-
-            let dxgi_device: IDXGIDevice = device.cast::<IDXGIDevice>()?;
-            dxgi_factory = dxgi_device.GetAdapter()?.GetParent()?;
-
-            let props = DXGI_SWAP_CHAIN_DESC1 {
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC {
-                    Count: 1,
-                    Quality: 0,
-                },
-                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                BufferCount: 2,
-                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                ..Default::default()
-            };
-
-            swap_chain = dxgi_factory.CreateSwapChainForHwnd(
-                &device,
-                window as windows::Win32::Foundation::HWND,
-                &props,
-                std::ptr::null(),
-                None,
-            )?;
-        }
 
         let brush_color = D2D1_COLOR_F {
             r: 0.92,
@@ -417,61 +364,14 @@ impl Overlay {
             opacity: 0.8,
             transform: Matrix3x2::identity(),
         };
-        let brush = unsafe { context.CreateSolidColorBrush(&brush_color, &brush_props)? };
+        let brush = unsafe { render_target.CreateSolidColorBrush(&brush_color, &brush_props)? };
 
         self.factory = Some(d2d_factory);
-        self.dx_factory = Some(dxgi_factory);
-        self.dx_context = Some(context);
+        self.render_target = Some(render_target);
         self.dw_factory = Some(dw_factory);
-        self.swap_chain = Some(swap_chain);
         self.stroke = Some(stroke_style);
         self.brush = Some(brush);
 
-        Ok(())
-    }
-
-    fn create_swap_chain_bitmap(&self) -> Result<()> {
-        let surface: IDXGISurface = unsafe { self.swap_chain.as_ref().unwrap().GetBuffer(0)? };
-
-        let props = D2D1_BITMAP_PROPERTIES1 {
-            pixelFormat: D2D1_PIXEL_FORMAT {
-                format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-            },
-            dpiX: 96.0,
-            dpiY: 96.0,
-            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
-            colorContext: None,
-        };
-
-        unsafe {
-            let bitmap = self
-                .dx_context
-                .as_ref()
-                .unwrap()
-                .CreateBitmapFromDxgiSurface(&surface, &props)?;
-            self.dx_context.as_ref().unwrap().SetTarget(bitmap);
-        };
-
-        Ok(())
-    }
-
-    fn resize_swap_chain_bitmap(&mut self) -> Result<()> {
-        if let Some(ctx) = &self.dx_context {
-            let swap_chain = self.swap_chain.as_ref().unwrap();
-            unsafe { ctx.SetTarget(None) };
-
-            if unsafe {
-                swap_chain
-                    .ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0)
-                    .is_ok()
-            } {
-                self.create_swap_chain_bitmap()?;
-            } else {
-                self.release_device();
-            }
-            self.draw()?;
-        }
         Ok(())
     }
 
