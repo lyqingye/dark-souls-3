@@ -1,13 +1,17 @@
 use std::{mem, ptr};
-use winapi::shared::ntdef::HANDLE;
-use winapi::um::memoryapi::{ReadProcessMemory, WriteProcessMemory, VirtualFreeEx, VirtualAllocEx, VirtualProtectEx};
-use winapi::shared::minwindef::{FALSE, LPCVOID, LPVOID, BOOL, PBOOL, DWORD, PDWORD};
 use winapi::shared::basetsd::SIZE_T;
+use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
+use winapi::shared::ntdef::HANDLE;
 use winapi::um::handleapi::CloseHandle;
+use winapi::um::memoryapi::{
+    ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory,
+};
 use winapi::um::processthreadsapi::OpenProcess;
-use winapi::um::winnt::{PROCESS_ALL_ACCESS, MEM_RELEASE, MEM_COMMIT, MEM_RESERVE};
+use winapi::um::tlhelp32::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_ALL_ACCESS};
 use winapi::um::wow64apiset::IsWow64Process;
-use winapi::um::tlhelp32::{Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS, CreateToolhelp32Snapshot};
 
 #[derive(Debug)]
 pub struct Process {
@@ -45,7 +49,7 @@ impl Process {
         }
     }
 
-    pub fn write<T: Copy>(&self, address: usize,buf: &T) -> bool {
+    pub fn write<T: Copy>(&self, address: usize, buf: &T) -> bool {
         unsafe {
             WriteProcessMemory(
                 self.handle,
@@ -57,29 +61,43 @@ impl Process {
         }
     }
 
-    pub fn alloc(&self,size: usize, protection: DWORD) -> Option<usize> {
-        let buffer = unsafe { VirtualAllocEx(self.handle,ptr::null_mut(),size,MEM_RESERVE | MEM_COMMIT,protection) };
+    pub fn alloc(&self, size: usize, protection: DWORD) -> Option<usize> {
+        let buffer = unsafe {
+            VirtualAllocEx(
+                self.handle,
+                ptr::null_mut(),
+                size,
+                MEM_RESERVE | MEM_COMMIT,
+                protection,
+            )
+        };
         return if buffer.is_null() {
             None
         } else {
             Some(buffer as usize)
-        }
+        };
     }
 
-    pub fn free(&self,address: usize) -> bool {
-        match unsafe { VirtualFreeEx(self.handle,address as LPVOID, 0 as SIZE_T,MEM_RELEASE)} {
-            FALSE => {
-                false
-            },
+    pub fn free(&self, address: usize) -> bool {
+        match unsafe { VirtualFreeEx(self.handle, address as LPVOID, 0 as SIZE_T, MEM_RELEASE) } {
+            FALSE => false,
             _ => true,
         }
     }
 
-    pub fn protect(&self,address: usize,size: usize,protection: DWORD) -> Option<DWORD> {
+    pub fn protect(&self, address: usize, size: usize, protection: DWORD) -> Option<DWORD> {
         let mut tmp: DWORD = 0;
-        match unsafe { VirtualProtectEx(self.handle,address as LPVOID,size,protection,&mut tmp as PDWORD)} {
+        match unsafe {
+            VirtualProtectEx(
+                self.handle,
+                address as LPVOID,
+                size,
+                protection,
+                &mut tmp as PDWORD,
+            )
+        } {
             FALSE => None,
-            _ => Some(tmp)
+            _ => Some(tmp),
         }
     }
 }
@@ -93,13 +111,13 @@ impl Drop for Process {
 }
 
 pub fn from_pid(pid: u32) -> Option<Process> {
-    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid)};
+    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid) };
     if handle.is_null() {
         return None;
     }
 
     let mut tmp: BOOL = 0;
-    if unsafe { IsWow64Process(handle,&mut tmp as PBOOL) } == FALSE {
+    if unsafe { IsWow64Process(handle, &mut tmp as PBOOL) } == FALSE {
         return None;
     }
 
@@ -124,7 +142,7 @@ pub fn from_name(name: &str) -> Option<Process> {
 
     let mut pe: PROCESSENTRY32W = unsafe { mem::zeroed() };
     pe.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
-    if unsafe { Process32FirstW(handle,&mut pe)} == FALSE {
+    if unsafe { Process32FirstW(handle, &mut pe) } == FALSE {
         return None;
     }
 
@@ -134,10 +152,9 @@ pub fn from_name(name: &str) -> Option<Process> {
             return from_pid(pe.th32ProcessID);
         }
 
-        if unsafe { Process32NextW(handle, &mut pe)} == FALSE {
+        if unsafe { Process32NextW(handle, &mut pe) } == FALSE {
             break;
         }
     }
     None
 }
-
