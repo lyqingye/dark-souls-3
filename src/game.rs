@@ -143,7 +143,7 @@ pub struct PlayerGameData {
 }
 
 impl PlayerGameDataMan {
-    pub fn init(player_game_data: usize, ps: &Process) -> Result<PlayerGameDataMan> {
+    pub fn init(player_game_data: usize, _ps: &Process) -> Result<PlayerGameDataMan> {
         let mut man = PlayerGameDataMan::default();
         man.player_game_data = player_game_data;
         Ok(man)

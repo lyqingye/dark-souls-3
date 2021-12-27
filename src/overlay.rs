@@ -15,7 +15,7 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_STROKE_STYLE_PROPERTIES,
-    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
+    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE,
 };
 
 use windows::Win32::Graphics::DirectWrite::{
@@ -30,11 +30,11 @@ use windows::Win32::Graphics::Gdi::{BeginPaint, CreateSolidBrush, EndPaint, PAIN
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExA, DefWindowProcA, DestroyWindow, DisableProcessWindowsGhosting,
-    DispatchMessageA, GetMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PeekMessageA,
+    DispatchMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PeekMessageA,
     PostQuitMessage, RegisterClassExA, SetForegroundWindow, SetLayeredWindowAttributes,
     SetWindowLongPtrA, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTA, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SIZE_MINIMIZED, SW_SHOW,
-    ULW_COLORKEY, WM_DESTROY, WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE,
+    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SW_SHOW,
+    ULW_COLORKEY, WM_DESTROY, WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT,
     WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
