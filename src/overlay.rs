@@ -30,12 +30,12 @@ use windows::Win32::Graphics::Gdi::{BeginPaint, CreateSolidBrush, EndPaint, PAIN
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExA, DefWindowProcA, DestroyWindow, DisableProcessWindowsGhosting,
-    DispatchMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PeekMessageA,
-    PostQuitMessage, RegisterClassExA, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowLongPtrA, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTA, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SW_SHOW,
-    ULW_COLORKEY, WM_DESTROY, WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT,
-    WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+    DispatchMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PeekMessageA, PostQuitMessage,
+    RegisterClassExA, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrA,
+    SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTA, CS_HREDRAW, CS_VREDRAW,
+    GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SW_SHOW, ULW_COLORKEY, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT, WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
 
 #[macro_export]

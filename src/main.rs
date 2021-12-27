@@ -24,23 +24,23 @@ fn main() {
                 let players = &chr.session_info_man.players.clone();
                 let mut offset = 10.0;
                 for player in players {
-                    let attrs = &player.player_game_data.data.attributes;
+                    let attrs = player.player_game_data.data.attributes;
                     let name = attrs.name_string();
                     {
                         s.draw_text(
                             format!(
                                 "Name: {}\nSL:   {}\nVig:  {}\nAtt:  {}\nEnd: {}\nVit:   {}\nStr:   {}\nDex: {}\nInt:   {}\nFth:  {}\nLck:  {}\n",
                                 name,
-                                attrs.soul_level.to_string(),
-                                attrs.vigor.to_string(),
-                                attrs.attunement.to_string(),
-                                attrs.endurance.to_string(),
-                                attrs.vitality.to_string(),
-                                attrs.strength.to_string(),
-                                attrs.dexterity.to_string(),
-                                attrs.intelligence.to_string(),
-                                attrs.faith.to_string(),
-                                attrs.luck.to_string(),
+                                attrs.soul_level_string(),
+                                attrs.vigor_string(),
+                                attrs.attunement_string(),
+                                attrs.endurance_string(),
+                                attrs.vitality_string(),
+                                attrs.strength_string(),
+                                attrs.dexterity_string(),
+                                attrs.intelligence_string(),
+                                attrs.faith_string(),
+                                attrs.luck_string(),
                             ),
                             offset,
                             30.0,

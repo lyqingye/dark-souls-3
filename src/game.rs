@@ -110,11 +110,51 @@ pub struct ChrAttributes {
 
 impl ChrAttributes {
     pub fn name_string(&self) -> String {
-        unsafe {
-            String::from_utf16_lossy(self.name_bytes.as_ref())
-                .trim_matches('\0')
-                .to_string()
-        }
+        let name_bytes = self.name_bytes;
+        String::from_utf16_lossy(name_bytes.as_ref())
+            .trim_matches('\0')
+            .to_string()
+    }
+    pub fn vigor_string(&self) -> String {
+        let v = self.vigor;
+        v.to_string()
+    }
+    pub fn attunement_string(&self) -> String {
+        let v = self.attunement;
+        v.to_string()
+    }
+    pub fn endurance_string(&self) -> String {
+        let v = self.endurance;
+        v.to_string()
+    }
+    pub fn strength_string(&self) -> String {
+        let v = self.strength;
+        v.to_string()
+    }
+    pub fn dexterity_string(&self) -> String {
+        let v = self.dexterity;
+        v.to_string()
+    }
+
+    pub fn intelligence_string(&self) -> String {
+        let v = self.intelligence;
+        v.to_string()
+    }
+    pub fn faith_string(&self) -> String {
+        let v = self.faith;
+        v.to_string()
+    }
+    pub fn luck_string(&self) -> String {
+        let v = self.luck;
+        v.to_string()
+    }
+    pub fn vitality_string(&self) -> String {
+        let v = self.vitality;
+        v.to_string()
+    }
+    pub fn soul_level_string(&self) -> String {
+        let v = self.soul_level;
+        v.to_string()
     }
 }
 
@@ -158,6 +198,7 @@ impl PlayerGameDataMan {
 impl PlayerIns {
     pub fn init(player_ins: usize, ps: &Process) -> Result<PlayerIns> {
         let mut man = PlayerIns::default();
+        man.player_ins = player_ins;
         man.sprj_chr_data_module =
             ps.read::<usize>(ps.read::<usize>(player_ins + 0x1F90)? + 0x18)?;
         man.player_game_data =
