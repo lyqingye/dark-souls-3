@@ -15,14 +15,28 @@ use windows::Win32::Graphics::Direct2D::{
     D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_HWND_RENDER_TARGET_PROPERTIES,
     D2D1_PRESENT_OPTIONS_IMMEDIATELY, D2D1_RENDER_TARGET_PROPERTIES,
     D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_STROKE_STYLE_PROPERTIES,
+    D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
 };
 
-use windows::Win32::Graphics::DirectWrite::{DWriteCreateFactory, IDWriteFactory1, IDWriteTextFormat, DWRITE_FACTORY_TYPE_SHARED, IDWriteFontCollection, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL};
+use windows::Win32::Graphics::DirectWrite::{
+    DWriteCreateFactory, IDWriteFactory1, IDWriteFontCollection, IDWriteTextFormat,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL,
+};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
+use crate::GameData;
 use windows::Win32::Graphics::Gdi::{BeginPaint, CreateSolidBrush, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
-use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExA, DefWindowProcA, DestroyWindow, DisableProcessWindowsGhosting, DispatchMessageA, GetMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PostQuitMessage, RegisterClassExA, SetLayeredWindowAttributes, SetWindowLongPtrA, SetWindowPos, ShowWindow, CREATESTRUCTA, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SIZE_MINIMIZED, SW_SHOW, ULW_COLORKEY, WM_DESTROY, WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExA, DefWindowProcA, DestroyWindow, DisableProcessWindowsGhosting,
+    DispatchMessageA, GetMessageA, GetWindowLongPtrA, GetWindowRect, LoadCursorW, PeekMessageA,
+    PostQuitMessage, RegisterClassExA, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowLongPtrA, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTA, CS_HREDRAW,
+    CS_VREDRAW, GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SIZE_MINIMIZED, SW_SHOW,
+    ULW_COLORKEY, WM_DESTROY, WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE,
+    WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+};
 
 #[macro_export]
 macro_rules! utf8_str {
@@ -36,6 +50,7 @@ macro_rules! utf16_str {
     };
 }
 
+pub type RenderCTX = GameData;
 pub type RenderFn = fn(&mut Overlay);
 
 pub struct Overlay {
@@ -51,6 +66,7 @@ pub struct Overlay {
     brush: Option<ID2D1SolidColorBrush>,
     dw_text_format: Option<IDWriteTextFormat>,
     render_fn: Option<RenderFn>,
+    render_ctx: RenderCTX,
 }
 
 #[no_mangle]
@@ -75,7 +91,7 @@ unsafe extern "system" fn wnd_proc(
 }
 
 impl Overlay {
-    pub fn render_target(& self) -> &ID2D1HwndRenderTarget {
+    pub fn render_target(&self) -> &ID2D1HwndRenderTarget {
         self.render_target.as_ref().unwrap()
     }
 
@@ -83,7 +99,15 @@ impl Overlay {
         Ok(())
     }
 
-    pub fn draw_text(&mut self, text: String, x: f32, y: f32) -> Result<()> {
+    pub fn render_ctx_mut(&mut self) -> &mut RenderCTX {
+        &mut self.render_ctx
+    }
+
+    pub fn render_ctx(&mut self) -> &RenderCTX {
+        &self.render_ctx
+    }
+
+    pub fn draw_text(&mut self, text: String, x: f32, y: f32, w: f32, h: f32) -> Result<()> {
         unsafe {
             let fmt = self.dw_text_format.as_ref().unwrap().clone();
             let brush = self.brush.as_ref().unwrap();
@@ -95,8 +119,8 @@ impl Overlay {
                 &D2D_RECT_F {
                     left: x,
                     top: y,
-                    right: 0.0,
-                    bottom: 0.0,
+                    right: x + w,
+                    bottom: y + h,
                 },
                 brush,
                 0,
@@ -188,7 +212,7 @@ impl Overlay {
     }
 
     /// Spawn an overlay
-    pub fn new(target: HWND) -> Result<Self> {
+    pub fn new(target: HWND, ctx: RenderCTX) -> Result<Self> {
         Ok(Self {
             target,
             overlay: 0,
@@ -199,6 +223,7 @@ impl Overlay {
             brush: None,
             dw_text_format: None,
             render_fn: None,
+            render_ctx: ctx,
         })
     }
 
@@ -282,11 +307,13 @@ impl Overlay {
         let mut message = MSG::default();
         unsafe {
             loop {
-                GetMessageA(&mut message, None, 0, 0);
+                PeekMessageA(&mut message, window, 0, 0, 0);
+                TranslateMessage(&mut message);
                 if message.message == WM_QUIT {
                     return Ok(());
                 }
                 DispatchMessageA(&message);
+                self.draw().unwrap();
             }
         }
     }
@@ -301,12 +328,12 @@ impl Overlay {
                     EndPaint(self.overlay, &ps);
                     0
                 }
-                WM_SIZE => {
-                    if wparam != SIZE_MINIMIZED as usize {
-                        self.release_device();
-                    }
-                    0
-                }
+                // WM_SIZE => {
+                //     if wparam != SIZE_MINIMIZED as usize {
+                //         self.release_device();
+                //     }
+                //     0
+                // }
                 WM_DISPLAYCHANGE => {
                     self.draw().unwrap();
                     0
@@ -366,6 +393,7 @@ impl Overlay {
             unsafe { d2d_factory.CreateHwndRenderTarget(&rt_props, &hw_rt_props)? };
         unsafe {
             render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            render_target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
         }
 
         let dw_factory: IDWriteFactory1 = unsafe {
@@ -373,17 +401,17 @@ impl Overlay {
                 .map(|f| std::mem::transmute(f))?
         };
 
-        let text_format = unsafe {
+        let text_format: IDWriteTextFormat = unsafe {
             let mut collections: Option<IDWriteFontCollection> = None;
-            dw_factory.GetSystemFontCollection(std::mem::transmute(&mut collections),BOOL(1))?;
+            dw_factory.GetSystemFontCollection(std::mem::transmute(&mut collections), BOOL(1))?;
             dw_factory.CreateTextFormat(
                 PWSTR("微软雅黑".as_ptr() as *mut u16),
                 collections.unwrap(),
                 DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_FONT_STYLE_NORMAL,
                 DWRITE_FONT_STRETCH_NORMAL,
-                50 as f32,
-                PWSTR(b"".as_ptr() as *mut u16)
+                128 as f32,
+                PWSTR(b"".as_ptr() as *mut u16),
             )?
         };
 
@@ -396,14 +424,14 @@ impl Overlay {
         let stroke_style = unsafe { d2d_factory.CreateStrokeStyle(&props, std::ptr::null(), 0)? };
 
         let brush_color = D2D1_COLOR_F {
-            r: 0.92,
-            g: 0.38,
-            b: 0.208,
+            r: 255.0,
+            g: 255.0,
+            b: 255.0,
             a: 1.0,
         };
 
         let brush_props = D2D1_BRUSH_PROPERTIES {
-            opacity: 0.8,
+            opacity: 1.0,
             transform: Matrix3x2::identity(),
         };
         let brush = unsafe { render_target.CreateSolidColorBrush(&brush_color, &brush_props)? };

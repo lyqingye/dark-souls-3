@@ -1,3 +1,5 @@
+use crate::error::ProcessError;
+use anyhow::Result;
 use std::{mem, ptr};
 use winapi::shared::basetsd::SIZE_T;
 use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
@@ -7,13 +9,14 @@ use winapi::um::memoryapi::{
     ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory,
 };
 use winapi::um::processthreadsapi::OpenProcess;
-use winapi::um::tlhelp32::{CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS};
+use winapi::um::tlhelp32::{
+    CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW,
+    MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
+};
 use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_ALL_ACCESS};
 use winapi::um::wow64apiset::IsWow64Process;
-use anyhow::Result;
-use crate::error::ProcessError;
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct Process {
     pub id: u32,
     pub is_wow64: bool,
@@ -28,8 +31,6 @@ pub struct Module {
 }
 
 impl Process {
-
-
     pub fn read<T: Copy>(&self, address: usize) -> Result<T> {
         let mut buffer = unsafe { mem::zeroed::<T>() };
         match unsafe {
@@ -110,16 +111,17 @@ impl Process {
         }
     }
 
-    pub fn get_module(&self,name: &str) -> Option<Module> {
-        let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.id) };
+    pub fn get_module(&self, name: &str) -> Option<Module> {
+        let handle =
+            unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.id) };
 
         if handle.is_null() {
             return None;
         }
-        let mut me: MODULEENTRY32W = unsafe { mem::zeroed()};
+        let mut me: MODULEENTRY32W = unsafe { mem::zeroed() };
         me.dwSize = mem::size_of::<MODULEENTRY32W>() as u32;
 
-        if unsafe { Module32FirstW(handle,&mut me)} == FALSE {
+        if unsafe { Module32FirstW(handle, &mut me) } == FALSE {
             return None;
         }
 
@@ -135,8 +137,8 @@ impl Process {
                 });
             }
 
-            if unsafe {Module32NextW(handle,&mut me)} == FALSE {
-                break
+            if unsafe { Module32NextW(handle, &mut me) } == FALSE {
+                break;
             }
         }
         None
