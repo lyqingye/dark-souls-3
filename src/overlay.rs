@@ -25,7 +25,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
-use crate::GameData;
+use crate::{utf16_str, utf8_str, GameData};
 use windows::Win32::Graphics::Gdi::{BeginPaint, CreateSolidBrush, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -37,18 +37,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_DISPLAYCHANGE, WM_NCCREATE, WM_PAINT, WM_QUIT, WNDCLASSEXA, WS_EX_LAYERED, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
 };
-
-#[macro_export]
-macro_rules! utf8_str {
-    ($str: expr) => {
-        PSTR(format!("{}\0", $str).as_ptr() as _)
-    };
-}
-macro_rules! utf16_str {
-    ($str: expr) => {
-        PWSTR($str.encode_utf16().collect::<Vec<u16>>().as_mut_ptr())
-    };
-}
 
 pub type RenderCTX = GameData;
 pub type RenderFn = fn(&mut Overlay);

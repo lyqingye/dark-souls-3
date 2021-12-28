@@ -1,5 +1,5 @@
 use crate::error::ProcessError;
-use crate::process::{from_name, Process};
+use crate::process::Process;
 use anyhow::Result;
 
 const PROCESS_NAME: &'static str = "DarkSoulsIII.exe";
@@ -13,7 +13,7 @@ pub struct GameData {
 
 impl GameData {
     pub fn init() -> Result<GameData> {
-        let process = from_name(PROCESS_NAME)
+        let process = Process::from_name(PROCESS_NAME)
             .ok_or(ProcessError::ProcessNotFound(PROCESS_NAME.to_string()))?;
         let world_chr_man = WorldChrMan::init(&process)?;
         Ok(Self {

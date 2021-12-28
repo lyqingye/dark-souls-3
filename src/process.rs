@@ -1,26 +1,31 @@
 use crate::error::ProcessError;
+use crate::utf16_str;
 use anyhow::Result;
+use std::ops::{Deref, DerefMut};
 use std::{mem, ptr};
 use winapi::shared::basetsd::SIZE_T;
-use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
+use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD, TRUE};
 use winapi::shared::ntdef::HANDLE;
-use winapi::um::handleapi::CloseHandle;
+use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::memoryapi::{
-    ReadProcessMemory, VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory,
+    CreateFileMappingW, FlushViewOfFile, MapViewOfFile, OpenFileMappingW, ReadProcessMemory,
+    UnmapViewOfFile, VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory,
+    FILE_MAP_ALL_ACCESS,
 };
 use winapi::um::processthreadsapi::OpenProcess;
 use winapi::um::tlhelp32::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW,
     MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
 };
-use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_ALL_ACCESS};
+use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PROCESS_ALL_ACCESS};
 use winapi::um::wow64apiset::IsWow64Process;
 
 #[derive(Debug, Clone)]
 pub struct Process {
     pub id: u32,
     pub is_wow64: bool,
-    pub handle: HANDLE,
+    handle: HANDLE,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +36,55 @@ pub struct Module {
 }
 
 impl Process {
+    pub fn from_pid(pid: u32) -> Option<Process> {
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid) };
+        if handle.is_null() {
+            return None;
+        }
+
+        let mut tmp: BOOL = 0;
+        if unsafe { IsWow64Process(handle, &mut tmp as PBOOL) } == FALSE {
+            return None;
+        }
+
+        let is_wow64 = match tmp {
+            FALSE => false,
+            _ => true,
+        };
+
+        Some(Process {
+            id: pid,
+            is_wow64,
+            handle,
+        })
+    }
+
+    pub fn from_name(name: &str) -> Option<Process> {
+        let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+
+        if handle.is_null() {
+            return None;
+        }
+
+        let mut pe: PROCESSENTRY32W = unsafe { mem::zeroed() };
+        pe.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
+        if unsafe { Process32FirstW(handle, &mut pe) } == FALSE {
+            return None;
+        }
+
+        loop {
+            let process_name = String::from_utf16(&pe.szExeFile).unwrap_or_else(|_| String::new());
+            if process_name.contains(name) {
+                return Self::from_pid(pe.th32ProcessID);
+            }
+
+            if unsafe { Process32NextW(handle, &mut pe) } == FALSE {
+                break;
+            }
+        }
+        None
+    }
+
     pub fn read<T: Copy>(&self, address: usize) -> Result<T> {
         let mut buffer = unsafe { mem::zeroed::<T>() };
         match unsafe {
@@ -143,6 +197,10 @@ impl Process {
         }
         None
     }
+
+    pub fn open_shmemq(&self, name: &str, create: bool, size: usize) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl Drop for Process {
@@ -153,51 +211,92 @@ impl Drop for Process {
     }
 }
 
-pub fn from_pid(pid: u32) -> Option<Process> {
-    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid) };
-    if handle.is_null() {
-        return None;
-    }
-
-    let mut tmp: BOOL = 0;
-    if unsafe { IsWow64Process(handle, &mut tmp as PBOOL) } == FALSE {
-        return None;
-    }
-
-    let is_wow64 = match tmp {
-        FALSE => false,
-        _ => true,
-    };
-
-    Some(Process {
-        id: pid,
-        is_wow64,
-        handle,
-    })
+#[derive(Debug)]
+pub struct ShareMemMq<'a> {
+    name: String,
+    meta: &'a mut ShareMemMqMeta,
+    buf: LPVOID,
 }
 
-pub fn from_name(name: &str) -> Option<Process> {
-    let handle = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+#[repr(packed)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShareMemMqMeta {
+    el_size: usize,
+    size: usize,
+    r_index: usize,
+    w_index: usize,
+    head_size: usize,
+}
 
-    if handle.is_null() {
-        return None;
-    }
-
-    let mut pe: PROCESSENTRY32W = unsafe { mem::zeroed() };
-    pe.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
-    if unsafe { Process32FirstW(handle, &mut pe) } == FALSE {
-        return None;
-    }
-
-    loop {
-        let process_name = String::from_utf16(&pe.szExeFile).unwrap_or_else(|_| String::new());
-        if process_name.contains(name) {
-            return from_pid(pe.th32ProcessID);
+impl<'a> ShareMemMq<'a> {
+    pub fn new<T>(name: &str, size: usize) -> Result<Self> {
+        let full_name = format!("Global\\{}", name);
+        let buf_size = std::mem::size_of::<ShareMemMqMeta>() + size * std::mem::size_of::<T>();
+        let file = unsafe {
+            let test_handle =
+                OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, full_name.as_ptr() as *mut u16);
+            if test_handle.is_null() {
+                println!("{:#x}", unsafe { GetLastError() });
+                CreateFileMappingW(
+                    INVALID_HANDLE_VALUE,
+                    std::ptr::null_mut(),
+                    PAGE_READWRITE,
+                    0,
+                    buf_size as DWORD,
+                    full_name.as_ptr() as *mut u16,
+                )
+            } else {
+                test_handle
+            }
+        };
+        if file.is_null() {
+            return Err(ProcessError::CreateFileMapping(full_name.clone()).into());
         }
 
-        if unsafe { Process32NextW(handle, &mut pe) } == FALSE {
-            break;
+        let buf = unsafe { MapViewOfFile(file, FILE_MAP_ALL_ACCESS, 0, 0, buf_size as SIZE_T) };
+
+        if buf.is_null() {
+            unsafe { CloseHandle(file) };
+            return Err(ProcessError::CreateFileMapping(full_name.clone()).into());
         }
+
+        let meta = unsafe { &mut *buf.cast::<ShareMemMqMeta>() };
+        meta.el_size = std::mem::size_of::<T>();
+        meta.size = size;
+        meta.r_index = 0;
+        meta.w_index = 0;
+        meta.head_size = std::mem::size_of::<ShareMemMqMeta>();
+
+        Ok(Self {
+            name: full_name.clone(),
+            meta,
+            buf,
+        })
     }
-    None
+}
+
+impl<'a> Drop for ShareMemMq<'a> {
+    fn drop(&mut self) {
+        unsafe {
+            assert_eq!(
+                TRUE,
+                FlushViewOfFile(
+                    self.buf as LPCVOID,
+                    self.meta.head_size + self.meta.size * self.meta.el_size
+                )
+            );
+            assert_eq!(TRUE, UnmapViewOfFile(self.buf as LPCVOID));
+        };
+    }
+}
+
+mod test {
+    use crate::process::ShareMemMq;
+
+    #[test]
+    pub fn test_shmemq() {
+        let mq = ShareMemMq::new::<u8>("myfile", 1024).unwrap();
+        mq.meta.w_index = mq.meta.w_index + 1;
+        println!("{:?}", mq)
+    }
 }

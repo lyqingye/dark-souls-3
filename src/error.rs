@@ -10,4 +10,7 @@ pub enum ProcessError {
 
     #[error("Process Not Found! Name: {0}")]
     ProcessNotFound(String),
+
+    #[error("Failed To Create File Mapping Name: {0}")]
+    CreateFileMapping(String),
 }
