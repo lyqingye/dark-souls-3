@@ -4,7 +4,9 @@ use anyhow::Result;
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::winnt::SYNCHRONIZE;
 use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject,
+};
 
 pub struct Mutex {
     handle: HANDLE,
@@ -19,10 +21,14 @@ impl Mutex {
             if handle.is_invalid() {
                 return Err(ProcessError::CreateMutex {
                     source: std::io::Error::last_os_error(),
-                }.into());
+                }
+                .into());
             }
-            WaitForSingleObject(handle,u32::MAX);
-            Ok(Self { handle ,unlocked: false})
+            WaitForSingleObject(handle, u32::MAX);
+            Ok(Self {
+                handle,
+                unlocked: false,
+            })
         }
     }
 

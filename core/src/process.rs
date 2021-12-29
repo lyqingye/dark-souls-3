@@ -1,4 +1,5 @@
 use crate::error::ProcessError;
+use crate::sync::Mutex;
 use crate::utf16_str;
 use anyhow::Result;
 use std::ops::{Deref, DerefMut};
@@ -22,7 +23,6 @@ use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PR
 use winapi::um::wow64apiset::IsWow64Process;
 use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
 use windows::Win32::System::Threading::CreateMutexW;
-use crate::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct Process {
@@ -276,7 +276,7 @@ impl<'a> ShareMemMq<'a> {
             meta.r_index = 0;
             meta.w_index = 0;
         }
-        let data_ptr = unsafe { buf.cast::<u8>().add(std::mem::size_of::<ShareMemMqMeta>())};
+        let data_ptr = unsafe { buf.cast::<u8>().add(std::mem::size_of::<ShareMemMqMeta>()) };
         let data = unsafe {
             &mut *std::ptr::slice_from_raw_parts_mut(&mut *data_ptr, meta.size - meta.head_size)
         };
@@ -300,8 +300,7 @@ impl<'a> ShareMemMq<'a> {
             None
         } else {
             unsafe {
-                let ptr_to_el =
-                    self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
+                let ptr_to_el = self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
                 let el_size = ptr_to_el.read();
                 if (el_size as usize) > remain_read_bytes {
                     lock.release();
@@ -331,10 +330,11 @@ impl<'a> ShareMemMq<'a> {
             && remain_read_bytes > std::mem::size_of::<u16>()
         {
             unsafe {
-                let ptr_to_el =
-                    self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
+                let ptr_to_el = self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
                 let el_size = ptr_to_el.read();
-                if (el_size as usize) > remain_read_bytes || (el_size as usize <= std::mem::size_of::<u16>())  {
+                if (el_size as usize) > remain_read_bytes
+                    || (el_size as usize <= std::mem::size_of::<u16>())
+                {
                     return Err(ProcessError::InvalidShareMemMq.into());
                 } else {
                     let ptr = self
@@ -392,22 +392,21 @@ impl<'a> Drop for ShareMemMq<'a> {
     }
 }
 
-
 mod test {
     use crate::process::{ShareMemMq, ShareMemMqMeta};
 
     #[test]
     pub fn test_share_memory_queue() {
-        let mut mq = ShareMemMq::open_or_new("test_memory_queue",4890).unwrap();
+        let mut mq = ShareMemMq::open_or_new("test_memory_queue", 4890).unwrap();
         assert_eq!(4890 + std::mem::size_of::<ShareMemMqMeta>(), mq.meta.size);
         assert_eq!(0, mq.meta.r_index);
         assert_eq!(0, mq.meta.w_index);
-        assert_eq!(None,mq.peek());
+        assert_eq!(None, mq.peek());
 
         let mut data_list = Vec::new();
         let mut el_sizes = 0;
         for i in 0..1000 {
-            let bytes = i.to_string().into_bytes() ;
+            let bytes = i.to_string().into_bytes();
             el_sizes += bytes.len() + std::mem::size_of::<u16>();
             data_list.push(bytes);
         }
@@ -415,36 +414,36 @@ mod test {
 
         assert_eq!(0, mq.meta.r_index);
         assert_eq!(el_sizes, mq.meta.w_index);
-        assert_eq!(el_sizes,mq.meta.w_index - mq.meta.r_index);
+        assert_eq!(el_sizes, mq.meta.w_index - mq.meta.r_index);
 
         let dequeue_data_list = mq.dequeue().unwrap();
-        assert_eq!(data_list,dequeue_data_list);
-        assert_eq!(mq.meta.r_index,  el_sizes);
+        assert_eq!(data_list, dequeue_data_list);
+        assert_eq!(mq.meta.r_index, el_sizes);
         assert_eq!(mq.meta.w_index, el_sizes);
-        assert_eq!(None,mq.peek());
+        assert_eq!(None, mq.peek());
     }
 
     #[test]
     pub fn test_share_memory_queue2() {
-        let mut mq = ShareMemMq::open_or_new("test_memory_queue",4890).unwrap();
+        let mut mq = ShareMemMq::open_or_new("test_memory_queue", 4890).unwrap();
         let mut data_list = Vec::new();
         let mut el_sizes = 0;
         for i in 0..500 {
-            let bytes = i.to_string().into_bytes() ;
+            let bytes = i.to_string().into_bytes();
             el_sizes += bytes.len() + std::mem::size_of::<u16>();
             data_list.push(bytes);
         }
         mq.enqueue(data_list.as_slice()).unwrap();
-        assert_eq!(mq.dequeue().unwrap(),data_list);
+        assert_eq!(mq.dequeue().unwrap(), data_list);
 
         let mut data_list2 = Vec::new();
         let mut el_sizes2 = 0;
         for i in 0..1000 {
-            let bytes = i.to_string().into_bytes() ;
+            let bytes = i.to_string().into_bytes();
             el_sizes2 += bytes.len() + std::mem::size_of::<u16>();
             data_list2.push(bytes);
         }
         mq.enqueue(data_list2.as_slice()).unwrap();
-        assert_eq!(mq.dequeue().unwrap(),data_list2);
+        assert_eq!(mq.dequeue().unwrap(), data_list2);
     }
 }

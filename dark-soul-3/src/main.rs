@@ -1,7 +1,7 @@
 use core::overlay::Overlay;
 
 fn main() {
-    let window = core::window::find_window(Some(""),None).unwrap();
+    let window = core::window::find_window(Some(""), None).unwrap();
     Overlay::new(window,core::game::GameData::init().unwrap())
         .unwrap()
         .run_loop(|s| {
