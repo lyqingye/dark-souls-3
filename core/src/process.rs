@@ -1,5 +1,5 @@
 use crate::error::ProcessError;
-use crate::{Mutex, utf16_str};
+use crate::utf16_str;
 use anyhow::Result;
 use std::ops::{Deref, DerefMut};
 use std::{mem, ptr};
@@ -22,6 +22,7 @@ use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PR
 use winapi::um::wow64apiset::IsWow64Process;
 use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
 use windows::Win32::System::Threading::CreateMutexW;
+use crate::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct Process {
@@ -393,8 +394,7 @@ impl<'a> Drop for ShareMemMq<'a> {
 
 
 mod test {
-    use crate::process::ShareMemMqMeta;
-    use crate::ShareMemMq;
+    use crate::process::{ShareMemMq, ShareMemMqMeta};
 
     #[test]
     pub fn test_share_memory_queue() {

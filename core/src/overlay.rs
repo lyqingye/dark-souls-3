@@ -25,7 +25,7 @@ use windows::Win32::Graphics::DirectWrite::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
-use crate::{utf16_str, utf8_str, GameData};
+use crate::{utf16_str, utf8_str, game::GameData};
 use windows::Win32::Graphics::Gdi::{BeginPaint, CreateSolidBrush, EndPaint, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::WindowsAndMessaging::{
