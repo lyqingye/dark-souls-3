@@ -1,7 +1,6 @@
 use crate::error::ProcessError;
 use crate::process::Process;
 use anyhow::{anyhow, Result};
-use std::fs::read;
 
 pub fn pattern_search(pattern: String, data: &[u8], find_first: bool) -> Result<Vec<usize>> {
     let mut result = Vec::new();
@@ -61,7 +60,7 @@ pub fn pattern_search(pattern: String, data: &[u8], find_first: bool) -> Result<
             }
             i += shift[data[i + len_pattern] as usize] as usize;
         }
-        i = 0;
+        j = 0;
     }
     Ok(result)
 }

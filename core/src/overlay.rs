@@ -4,7 +4,7 @@ use winapi::um::wingdi::RGB;
 use windows::core::*;
 use windows::Foundation::Numerics::Matrix3x2;
 
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, PSTR, PWSTR, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, PWSTR, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
 };

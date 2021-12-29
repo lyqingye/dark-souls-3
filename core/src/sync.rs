@@ -1,12 +1,9 @@
 use crate::error::ProcessError;
 use crate::utf16_str;
 use anyhow::Result;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::winnt::SYNCHRONIZE;
+
 use windows::Win32::Foundation::{BOOL, HANDLE};
-use windows::Win32::System::Threading::{
-    CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject,
-};
+use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 
 pub struct Mutex {
     handle: HANDLE,

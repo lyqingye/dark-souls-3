@@ -1,18 +1,17 @@
 use crate::error::ProcessError;
 use crate::sync::Mutex;
-use crate::utf16_str;
+
 use anyhow::Result;
-use std::ops::{Deref, DerefMut};
+
 use std::{mem, ptr};
 use winapi::shared::basetsd::SIZE_T;
-use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD, TRUE};
+use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
 use winapi::shared::ntdef::HANDLE;
-use winapi::um::errhandlingapi::GetLastError;
+
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::memoryapi::{
-    CreateFileMappingW, FlushViewOfFile, MapViewOfFile, OpenFileMappingW, ReadProcessMemory,
-    UnmapViewOfFile, VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory,
-    FILE_MAP_ALL_ACCESS,
+    CreateFileMappingW, MapViewOfFile, OpenFileMappingW, ReadProcessMemory, UnmapViewOfFile,
+    VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory, FILE_MAP_ALL_ACCESS,
 };
 use winapi::um::processthreadsapi::OpenProcess;
 use winapi::um::tlhelp32::{
@@ -21,8 +20,6 @@ use winapi::um::tlhelp32::{
 };
 use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PROCESS_ALL_ACCESS};
 use winapi::um::wow64apiset::IsWow64Process;
-use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
-use windows::Win32::System::Threading::CreateMutexW;
 
 #[derive(Debug, Clone)]
 pub struct Process {
@@ -201,7 +198,7 @@ impl Process {
         None
     }
 
-    pub fn open_shmemq(&self, name: &str, create: bool, size: usize) -> Result<()> {
+    pub fn open_shmemq(&self, _name: &str, _create: bool, _size: usize) -> Result<()> {
         Ok(())
     }
 }
@@ -393,7 +390,6 @@ impl<'a> Drop for ShareMemMq<'a> {
 }
 
 mod test {
-    use crate::process::{ShareMemMq, ShareMemMqMeta};
 
     #[test]
     pub fn test_share_memory_queue() {
