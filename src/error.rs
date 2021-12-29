@@ -13,4 +13,16 @@ pub enum ProcessError {
 
     #[error("Failed To Create File Mapping Name: {0}")]
     CreateFileMapping(String),
+
+    #[error("Failed To Create Mutex")]
+    CreateMutex {
+        #[from]
+        source: std::io::Error,
+    },
+
+    #[error("Invalid Share Memory Message Queue")]
+    InvalidShareMemMq,
+
+    #[error("Share Memory Message Queue Has Full")]
+    ShareMemMqHasFull,
 }

@@ -1,5 +1,5 @@
 use crate::error::ProcessError;
-use crate::utf16_str;
+use crate::{Mutex, utf16_str};
 use anyhow::Result;
 use std::ops::{Deref, DerefMut};
 use std::{mem, ptr};
@@ -20,6 +20,8 @@ use winapi::um::tlhelp32::{
 };
 use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PROCESS_ALL_ACCESS};
 use winapi::um::wow64apiset::IsWow64Process;
+use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+use windows::Win32::System::Threading::CreateMutexW;
 
 #[derive(Debug, Clone)]
 pub struct Process {
@@ -215,13 +217,16 @@ impl Drop for Process {
 pub struct ShareMemMq<'a> {
     name: String,
     meta: &'a mut ShareMemMqMeta,
+    data: &'a mut [u8],
+
+    // Handles
+    map: HANDLE,
     buf: LPVOID,
 }
 
 #[repr(packed)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ShareMemMqMeta {
-    el_size: usize,
     size: usize,
     r_index: usize,
     w_index: usize,
@@ -229,14 +234,16 @@ pub struct ShareMemMqMeta {
 }
 
 impl<'a> ShareMemMq<'a> {
-    pub fn new<T>(name: &str, size: usize) -> Result<Self> {
-        let full_name = format!("Global\\{}", name);
-        let buf_size = std::mem::size_of::<ShareMemMqMeta>() + size * std::mem::size_of::<T>();
+    pub fn open_or_new(name: &str, size: usize) -> Result<Self> {
+        let mut lock = Mutex::acquire(name)?;
+        let full_name = format!("{}", name);
+        let buf_size = std::mem::size_of::<ShareMemMqMeta>() + size;
+        let is_new;
         let file = unsafe {
             let test_handle =
                 OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, full_name.as_ptr() as *mut u16);
             if test_handle.is_null() {
-                println!("{:#x}", unsafe { GetLastError() });
+                is_new = true;
                 CreateFileMappingW(
                     INVALID_HANDLE_VALUE,
                     std::ptr::null_mut(),
@@ -246,6 +253,7 @@ impl<'a> ShareMemMq<'a> {
                     full_name.as_ptr() as *mut u16,
                 )
             } else {
+                is_new = false;
                 test_handle
             }
         };
@@ -261,42 +269,182 @@ impl<'a> ShareMemMq<'a> {
         }
 
         let meta = unsafe { &mut *buf.cast::<ShareMemMqMeta>() };
-        meta.el_size = std::mem::size_of::<T>();
-        meta.size = size;
-        meta.r_index = 0;
-        meta.w_index = 0;
-        meta.head_size = std::mem::size_of::<ShareMemMqMeta>();
-
+        if is_new {
+            meta.size = buf_size;
+            meta.head_size = std::mem::size_of::<ShareMemMqMeta>();
+            meta.r_index = 0;
+            meta.w_index = 0;
+        }
+        let data_ptr = unsafe { buf.cast::<u8>().add(std::mem::size_of::<ShareMemMqMeta>())};
+        let data = unsafe {
+            &mut *std::ptr::slice_from_raw_parts_mut(&mut *data_ptr, meta.size - meta.head_size)
+        };
+        lock.release();
         Ok(Self {
             name: full_name.clone(),
             meta,
+            map: file,
             buf,
+            data,
         })
+    }
+
+    pub fn peek(&self) -> Option<&[u8]> {
+        let mut lock = Mutex::acquire(self.name.as_str()).ok()?;
+        let data_size = self.meta.size - self.meta.head_size;
+        let remain_read_bytes = self.meta.w_index - self.meta.r_index;
+        if self.meta.r_index == self.meta.w_index || remain_read_bytes <= std::mem::size_of::<u16>()
+        {
+            lock.release();
+            None
+        } else {
+            unsafe {
+                let ptr_to_el =
+                    self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
+                let el_size = ptr_to_el.read();
+                if (el_size as usize) > remain_read_bytes {
+                    lock.release();
+                    None
+                } else {
+                    let ptr = self
+                        .data
+                        .as_ptr()
+                        .add((self.meta.r_index % data_size) + std::mem::size_of::<u16>())
+                        as *mut u8;
+                    lock.release();
+                    Some(&mut *std::ptr::slice_from_raw_parts_mut(
+                        ptr,
+                        el_size as usize - std::mem::size_of::<u16>(),
+                    ))
+                }
+            }
+        }
+    }
+
+    pub fn dequeue(&mut self) -> Result<Vec<Vec<u8>>> {
+        let mut lock = Mutex::acquire(self.name.as_str())?;
+        let data_size = self.meta.size - self.meta.head_size;
+        let mut remain_read_bytes = self.meta.w_index - self.meta.r_index;
+        let mut result = Vec::new();
+        while self.meta.r_index < self.meta.w_index
+            && remain_read_bytes > std::mem::size_of::<u16>()
+        {
+            unsafe {
+                let ptr_to_el =
+                    self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
+                let el_size = ptr_to_el.read();
+                if (el_size as usize) > remain_read_bytes || (el_size as usize <= std::mem::size_of::<u16>())  {
+                    return Err(ProcessError::InvalidShareMemMq.into());
+                } else {
+                    let ptr = self
+                        .data
+                        .as_ptr()
+                        .add((self.meta.r_index % data_size) + std::mem::size_of::<u16>())
+                        as *mut u8;
+                    let el = &*std::ptr::slice_from_raw_parts_mut(
+                        ptr,
+                        el_size as usize - std::mem::size_of::<u16>(),
+                    );
+                    self.meta.r_index = self.meta.r_index + el_size as usize;
+                    result.push(el.to_vec());
+                }
+            }
+            remain_read_bytes = self.meta.w_index - self.meta.r_index;
+        }
+        lock.release();
+        Ok(result)
+    }
+
+    pub fn enqueue(&mut self, elements: &[Vec<u8>]) -> Result<()> {
+        let mut lock = Mutex::acquire(self.name.as_str())?;
+        let data_size = self.meta.size - self.meta.head_size;
+        let remain_bytes = self.meta.size - (self.meta.w_index - self.meta.r_index);
+        let mut size_of = 0;
+        for el in elements {
+            size_of += el.len() + std::mem::size_of::<u16>();
+        }
+        if size_of > remain_bytes {
+            return Err(ProcessError::ShareMemMqHasFull.into());
+        }
+        for el in elements {
+            let idx = self.meta.w_index % data_size;
+            unsafe {
+                let ptr_to_size = self.data.as_ptr().add(idx) as *mut u16;
+                ptr_to_size.write((el.len() + std::mem::size_of::<u16>()) as u16);
+                let ptr_to_el = self.data.as_ptr().add(idx + std::mem::size_of::<u16>()) as *mut u8;
+                let new_el = &mut *std::ptr::slice_from_raw_parts_mut(ptr_to_el, el.len() as usize);
+                new_el.copy_from_slice(el.as_slice());
+                self.meta.w_index = self.meta.w_index + el.len() + std::mem::size_of::<u16>();
+            }
+        }
+        lock.release();
+        Ok(())
     }
 }
 
 impl<'a> Drop for ShareMemMq<'a> {
     fn drop(&mut self) {
         unsafe {
-            assert_eq!(
-                TRUE,
-                FlushViewOfFile(
-                    self.buf as LPCVOID,
-                    self.meta.head_size + self.meta.size * self.meta.el_size
-                )
-            );
-            assert_eq!(TRUE, UnmapViewOfFile(self.buf as LPCVOID));
+            UnmapViewOfFile(self.buf as LPCVOID);
+            CloseHandle(self.map);
         };
     }
 }
 
+
 mod test {
-    use crate::process::ShareMemMq;
+    use crate::process::ShareMemMqMeta;
+    use crate::ShareMemMq;
 
     #[test]
-    pub fn test_shmemq() {
-        let mq = ShareMemMq::new::<u8>("myfile", 1024).unwrap();
-        mq.meta.w_index = mq.meta.w_index + 1;
-        println!("{:?}", mq)
+    pub fn test_share_memory_queue() {
+        let mut mq = ShareMemMq::open_or_new("test_memory_queue",4890).unwrap();
+        assert_eq!(4890 + std::mem::size_of::<ShareMemMqMeta>(), mq.meta.size);
+        assert_eq!(0, mq.meta.r_index);
+        assert_eq!(0, mq.meta.w_index);
+        assert_eq!(None,mq.peek());
+
+        let mut data_list = Vec::new();
+        let mut el_sizes = 0;
+        for i in 0..1000 {
+            let bytes = i.to_string().into_bytes() ;
+            el_sizes += bytes.len() + std::mem::size_of::<u16>();
+            data_list.push(bytes);
+        }
+        mq.enqueue(data_list.as_slice()).unwrap();
+
+        assert_eq!(0, mq.meta.r_index);
+        assert_eq!(el_sizes, mq.meta.w_index);
+        assert_eq!(el_sizes,mq.meta.w_index - mq.meta.r_index);
+
+        let dequeue_data_list = mq.dequeue().unwrap();
+        assert_eq!(data_list,dequeue_data_list);
+        assert_eq!(mq.meta.r_index,  el_sizes);
+        assert_eq!(mq.meta.w_index, el_sizes);
+        assert_eq!(None,mq.peek());
+    }
+
+    #[test]
+    pub fn test_share_memory_queue2() {
+        let mut mq = ShareMemMq::open_or_new("test_memory_queue",4890).unwrap();
+        let mut data_list = Vec::new();
+        let mut el_sizes = 0;
+        for i in 0..500 {
+            let bytes = i.to_string().into_bytes() ;
+            el_sizes += bytes.len() + std::mem::size_of::<u16>();
+            data_list.push(bytes);
+        }
+        mq.enqueue(data_list.as_slice()).unwrap();
+        assert_eq!(mq.dequeue().unwrap(),data_list);
+
+        let mut data_list2 = Vec::new();
+        let mut el_sizes2 = 0;
+        for i in 0..1000 {
+            let bytes = i.to_string().into_bytes() ;
+            el_sizes2 += bytes.len() + std::mem::size_of::<u16>();
+            data_list2.push(bytes);
+        }
+        mq.enqueue(data_list2.as_slice()).unwrap();
+        assert_eq!(mq.dequeue().unwrap(),data_list2);
     }
 }
