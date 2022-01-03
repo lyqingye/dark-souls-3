@@ -7,7 +7,7 @@ const PROCESS_NAME: &'static str = "DarkSoulsIII.exe";
 
 #[derive(Debug, Clone)]
 pub struct GameData {
-    ps: Process,
+    pub ps: Process,
     world_chr_man: WorldChrMan,
 }
 

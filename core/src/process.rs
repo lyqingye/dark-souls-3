@@ -1,24 +1,38 @@
 use crate::error::ProcessError;
 use crate::sync::Mutex;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 
+use crossbeam_channel::{unbounded, Sender};
+use std::borrow::BorrowMut;
+use std::cmp::max;
+use std::collections::HashSet;
+use std::fs::read;
+use std::ops::DerefMut;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::{mem, ptr};
 use winapi::shared::basetsd::SIZE_T;
 use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
 use winapi::shared::ntdef::HANDLE;
 
+use crate::error::ProcessError::ProcessNotFound;
+use crate::pattern::pattern_search2;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::memoryapi::{
     CreateFileMappingW, MapViewOfFile, OpenFileMappingW, ReadProcessMemory, UnmapViewOfFile,
-    VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, WriteProcessMemory, FILE_MAP_ALL_ACCESS,
+    VirtualAllocEx, VirtualFreeEx, VirtualProtectEx, VirtualQuery, WriteProcessMemory,
+    FILE_MAP_ALL_ACCESS,
 };
-use winapi::um::processthreadsapi::OpenProcess;
+use winapi::um::processthreadsapi::{GetCurrentProcessId, OpenProcess};
 use winapi::um::tlhelp32::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW,
     MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
 };
-use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PROCESS_ALL_ACCESS};
+use winapi::um::winnt::{
+    MEMORY_BASIC_INFORMATION, MEMORY_BASIC_INFORMATION64, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
+    PAGE_READWRITE, PMEMORY_BASIC_INFORMATION, PMEMORY_BASIC_INFORMATION64, PROCESS_ALL_ACCESS,
+};
 use winapi::um::wow64apiset::IsWow64Process;
 
 #[derive(Debug, Clone)]
@@ -35,7 +49,26 @@ pub struct Module {
     pub size: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct RTTIInfo {
+    pub vf_ptr: usize,
+    pub vf_meta: usize,
+    pub type_desc: String,
+    pub base_class: Vec<String>,
+}
+
+#[derive(Debug, Copy, Clone)]
+#[repr(C)]
+struct TypeDescriptor {
+    pvftable: usize,
+    spare: usize,
+    name: char,
+}
+
 impl Process {
+    pub fn current_process() -> Option<Process> {
+        unsafe { Process::from_pid(GetCurrentProcessId()) }
+    }
     pub fn from_pid(pid: u32) -> Option<Process> {
         let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, 0, pid) };
         if handle.is_null() {
@@ -101,16 +134,49 @@ impl Process {
         }
     }
 
-    pub fn read_ptr<T: Copy>(&self, buf: *mut T, address: usize, count: usize) -> bool {
+    pub fn read_ptr<T: Copy>(&self, buf: *mut T, address: usize, count: usize) -> Result<()> {
         unsafe {
-            ReadProcessMemory(
+            if ReadProcessMemory(
                 self.handle,
                 address as LPCVOID,
-                buf as *mut T as LPVOID,
+                buf as LPVOID,
                 mem::size_of::<T>() as SIZE_T * count,
                 ptr::null_mut::<SIZE_T>(),
             ) != FALSE
+            {
+                Ok(())
+            } else {
+                Err(ProcessError::ReadMemoryFail(address).into())
+            }
         }
+    }
+
+    pub fn read_utf8_str(
+        &self,
+        address: usize,
+        max_length: usize,
+        filter: &[char],
+    ) -> Result<String> {
+        let mut buf: Vec<u8> = Vec::with_capacity(max_length);
+        buf.resize(max_length, 0);
+        self.read_ptr(buf.as_mut_ptr(), address, max_length)?;
+        let mut str = String::with_capacity(max_length);
+        'label: for b in buf {
+            let c = b as char;
+            if c == '\0' {
+                break;
+            }
+            for f in filter {
+                if c == *f {
+                    break 'label;
+                }
+            }
+            // if c.is_ascii_graphic() || c.is_ascii_digit() {
+            //     str.push(c);
+            // }
+            str.push(c);
+        }
+        Ok(str)
     }
 
     pub fn write<T: Copy>(&self, address: usize, buf: &T) -> bool {
@@ -165,6 +231,22 @@ impl Process {
         }
     }
 
+    pub fn query_memory_info(&self, address: usize) -> Result<MEMORY_BASIC_INFORMATION> {
+        unsafe {
+            let mut information = mem::zeroed::<MEMORY_BASIC_INFORMATION>();
+            if VirtualQuery(
+                address as LPCVOID,
+                &mut information,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>() as SIZE_T,
+            ) != 0
+            {
+                Ok(information)
+            } else {
+                Err(ProcessError::QueryMemoryFail(address).into())
+            }
+        }
+    }
+
     pub fn get_module(&self, name: &str) -> Option<Module> {
         let handle =
             unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, self.id) };
@@ -198,9 +280,130 @@ impl Process {
         None
     }
 
+    pub fn fast_rtti_dump(&self, module: &str) -> Result<Vec<RTTIInfo>> {
+        let pool = threadpool::ThreadPool::new(num_cpus::get());
+        let module = self
+            .get_module(module)
+            .ok_or(ProcessError::ModuleNotFound)?;
+        let mut img_buf = Vec::with_capacity(module.size);
+        img_buf.resize(module.size, 0);
+        self.read_ptr(img_buf.as_mut_ptr(), module.base, module.size)?;
+        let read_only_buffer = Arc::new(img_buf);
+        let sign: Vec<usize> = pattern_search2(
+            b".?AVtype_info@@",
+            read_only_buffer.clone().as_slice(),
+            false,
+            Some(module.base),
+        )?;
+        if let Some(sign) = sign.first(){
+            let type_desc: TypeDescriptor =
+                self.read::<TypeDescriptor>(*sign - 0x10)?;
+            let mut types: Vec<usize> = pattern_search2(
+                &type_desc.pvftable.to_le_bytes(),
+                read_only_buffer.clone().as_slice(),
+                false,
+                Some(module.base),
+            )?;
+            types.sort();
+            types.dedup();
+            let (_tx, rx) = unbounded::<RTTIInfo>();
+            for _type in types {
+                let buffer = read_only_buffer.clone();
+                let pid = self.id;
+                let tx = _tx.clone();
+                pool.execute(move || {
+                    let ps = Process::from_pid(pid).unwrap();
+                    let type_offset = (_type - module.base) as u32;
+                    if let Ok(mut references) = pattern_search2(
+                        &type_offset.to_le_bytes(),
+                        buffer.as_slice(),
+                        false,
+                        Some(module.base),
+                    ) {
+                        references.sort();
+                        references.dedup();
+                        for reference in references {
+                            if let Ok(0) = ps.read::<usize>(_type) {
+                                continue;
+                            }
+                            let object_locator: usize = reference - 0xc;
+                            if let Ok(mut meta_pointers) = pattern_search2(
+                                &object_locator.to_le_bytes(),
+                                buffer.as_slice(),
+                                true,
+                                Some(module.base),
+                            ) {
+                                meta_pointers.sort();
+                                meta_pointers.dedup();
+                                if meta_pointers.len() == 1 {
+                                    let meta = meta_pointers.first().unwrap();
+                                    if let Ok(mut rtti) = Self::get_rtti_from_type(
+                                        &ps,
+                                        _type,
+                                        object_locator,
+                                        module.base,
+                                    ) {
+                                        rtti.vf_ptr = *meta + 0x8;
+                                        rtti.vf_meta = *meta;
+                                        tx.send(rtti);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            let mut result = Vec::with_capacity(1024);
+            while pool.active_count() > 0 {
+                if let Ok(rtti) = rx.recv() {
+                    result.push(rtti);
+                }
+            }
+            while let Ok(rtti) = rx.try_recv() {
+                result.push(rtti);
+            }
+            return Ok(result);
+        }
+
+        Ok(Vec::new())
+    }
+
+    fn get_rtti_from_type(
+        ps: &Process,
+        _type: usize,
+        object_locator: usize,
+        base: usize,
+    ) -> Result<RTTIInfo> {
+        let class_name = ps.read_utf8_str(_type + 0x10, 255, &[])?;
+        let class_heirarchy = ps.read::<u32>(object_locator + 0x10)? as usize + base;
+        let class_cnt = ps.read::<u32>(class_heirarchy + 0x8)?;
+        let class_array = ps.read::<u32>(class_heirarchy + 0xc)? as usize + base;
+        let mut base_class = Vec::new();
+        for i in 0..class_cnt {
+            let td_offset = ps.read::<u32>((i * 4) as usize + class_array)?;
+            let td = ps.read::<u32>(td_offset as usize + base)? as usize + base;
+            base_class.push(ps.read_utf8_str(td + 0x10, 255, &[])?);
+        }
+        Ok(RTTIInfo {
+            type_desc: class_name,
+            vf_ptr: 0,
+            vf_meta: 0,
+            base_class,
+        })
+    }
+
     pub fn open_shmemq(&self, _name: &str, _create: bool, _size: usize) -> Result<()> {
         Ok(())
     }
+}
+
+fn safe_add(a: usize, b: usize) -> Result<usize> {
+    a.checked_add(b).ok_or(anyhow!("Overflow"))
+}
+
+fn safe_sub(a: usize, b: usize) -> Result<usize> {
+    a.checked_sub(b).ok_or(anyhow!("Overflow"))
 }
 
 impl Drop for Process {
@@ -390,6 +593,7 @@ impl<'a> Drop for ShareMemMq<'a> {
 }
 
 mod test {
+    use crate::process::{ShareMemMq, ShareMemMqMeta};
 
     #[test]
     pub fn test_share_memory_queue() {

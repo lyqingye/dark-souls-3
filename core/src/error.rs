@@ -8,6 +8,9 @@ pub enum ProcessError {
     #[error("Failed To Read Memory! Address: {0:#x}")]
     ReadMemoryFail(usize),
 
+    #[error("Failed To Query Memory! Address: {0:#x}")]
+    QueryMemoryFail(usize),
+
     #[error("Process Not Found! Name: {0}")]
     ProcessNotFound(String),
 

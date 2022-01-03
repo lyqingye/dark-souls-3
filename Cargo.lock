@@ -160,10 +160,13 @@ name = "core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "hex",
  "iced-x86",
+ "num_cpus",
  "pelite",
  "thiserror",
+ "threadpool",
  "winapi",
  "windows",
 ]
@@ -329,6 +332,7 @@ name = "dark-soul-3"
 version = "0.1.0"
 dependencies = [
  "core",
+ "threadpool",
 ]
 
 [[package]]
@@ -900,6 +904,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cee7e88156f3f9e19bdd598f8d6c9db7bf4078f99f8381f43a55b09648d1a6e3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "num_enum"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1220,6 +1233,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "threadpool"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae49a41f112cb5cb00c82a4a2f78c5b98b430a187eeb3ce2d7df49b8189b661b"
 
 [[package]]
 name = "toml"
