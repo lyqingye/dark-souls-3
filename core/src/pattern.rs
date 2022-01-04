@@ -144,8 +144,9 @@ pub fn remote_pattern_search(
         }
         let buffer_size = end - begin;
         let rip_base;
+        let success;
         if i == 0 {
-            process.read_ptr(buffer.as_mut_ptr(), begin, buffer_size)?;
+            success = process.read_ptr(buffer.as_mut_ptr(), begin, buffer_size);
             rip_base = begin;
         } else {
             let tail = buffer[page_size..].to_vec();
@@ -154,12 +155,15 @@ pub fn remote_pattern_search(
             for i in 0..pattern_size {
                 *buffer.get_mut(0).unwrap() = *tail.get(i).unwrap();
             }
-            process.read_ptr(
+            success = process.read_ptr(
                 unsafe { buffer.as_mut_ptr().add(pattern_size) },
                 begin,
                 buffer_size,
-            )?;
+            );
             rip_base = begin - pattern_size;
+        }
+        if success.is_err() {
+            continue;
         }
         let sub_result = pattern_search(pattern.clone(), buffer.as_slice(), find_first, None)?;
         for offset in &sub_result {

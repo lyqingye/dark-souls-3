@@ -17,7 +17,7 @@ use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWO
 use winapi::shared::ntdef::HANDLE;
 
 use crate::error::ProcessError::ProcessNotFound;
-use crate::pattern::pattern_search2;
+use crate::pattern::{pattern_search2, remote_pattern_search, remote_pattern_search2};
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::memoryapi::{
     CreateFileMappingW, MapViewOfFile, OpenFileMappingW, ReadProcessMemory, UnmapViewOfFile,
@@ -49,7 +49,7 @@ pub struct Module {
     pub size: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RTTIInfo {
     pub vf_ptr: usize,
     pub vf_meta: usize,
@@ -295,9 +295,8 @@ impl Process {
             false,
             Some(module.base),
         )?;
-        if let Some(sign) = sign.first(){
-            let type_desc: TypeDescriptor =
-                self.read::<TypeDescriptor>(*sign - 0x10)?;
+        if let Some(sign) = sign.first() {
+            let type_desc: TypeDescriptor = self.read::<TypeDescriptor>(*sign - 0x10)?;
             let mut types: Vec<usize> = pattern_search2(
                 &type_desc.pvftable.to_le_bytes(),
                 read_only_buffer.clone().as_slice(),
@@ -355,13 +354,20 @@ impl Process {
             }
 
             let mut result = Vec::with_capacity(1024);
+            let mut set = HashSet::with_capacity(1024);
             while pool.active_count() > 0 {
                 if let Ok(rtti) = rx.recv() {
-                    result.push(rtti);
+                    if !set.contains(&rtti.vf_ptr) {
+                        set.insert(rtti.vf_ptr);
+                        result.push(rtti);
+                    }
                 }
             }
             while let Ok(rtti) = rx.try_recv() {
-                result.push(rtti);
+                if !set.contains(&rtti.vf_ptr) {
+                    set.insert(rtti.vf_ptr);
+                    result.push(rtti);
+                }
             }
             return Ok(result);
         }
@@ -391,6 +397,42 @@ impl Process {
             vf_meta: 0,
             base_class,
         })
+    }
+
+    pub fn pattern_search(
+        &self,
+        start: usize,
+        size: usize,
+        pattern: String,
+        find_first: bool,
+    ) -> Result<Vec<usize>> {
+        remote_pattern_search(self, start, size, size, pattern, find_first)
+    }
+
+    pub fn pattern_search2(
+        &self,
+        start: usize,
+        size: usize,
+        pattern: &[u8],
+        find_first: bool,
+    ) -> Result<Vec<usize>> {
+        remote_pattern_search2(self, start, size, size, pattern, find_first)
+    }
+
+    pub fn pattern_search3<T: Sized>(
+        &self,
+        start: usize,
+        size: usize,
+        pattern: &T,
+        find_first: bool,
+    ) -> Result<Vec<usize>> {
+        unsafe {
+            let buffer = std::ptr::slice_from_raw_parts(
+                pattern as *const T as *const u8,
+                std::mem::size_of::<T>(),
+            );
+            self.pattern_search2(start, size, &*buffer, find_first)
+        }
     }
 
     pub fn open_shmemq(&self, _name: &str, _create: bool, _size: usize) -> Result<()> {

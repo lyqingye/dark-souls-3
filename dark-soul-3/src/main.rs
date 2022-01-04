@@ -55,10 +55,14 @@ fn to_ptr<T>(address: usize) -> *const T {
 fn main() {
     let now = std::time::Instant::now();
     let ps = core::process::Process::from_name("DarkSoulsIII.exe").unwrap();
-    let xxx = ps.fast_rtti_dump("DarkSoulsIII.exe").unwrap();
-    for el in &xxx {
-        println!("{:?}", el);
-    }
+    let value: usize = 100;
+    let module = ps.get_module("DarkSoulsIII.exe").unwrap();
+    let result = ps.pattern_search3(module.base, module.size,&value,false).unwrap();
+    println!("{:?}",result);
+    // let xxx = ps.fast_rtti_dump("DarkSoulsIII.exe").unwrap();
+    // for el in &xxx {
+    //     println!("{:?}", el);
+    // }
     // let module = ps.get_module("DarkSoulsIII.exe").unwrap();
     // let mut image_buffer = Vec::with_capacity(module.size);
     // image_buffer.resize(module.size, 0);
