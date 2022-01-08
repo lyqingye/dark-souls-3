@@ -1,4 +1,4 @@
-use crate::error::ProcessError;
+use crate::error::{ProcessError, ShMemQError};
 use crate::sync::Mutex;
 
 use anyhow::{anyhow, Result};
@@ -7,11 +7,16 @@ use crossbeam_channel::{unbounded, Sender};
 use std::borrow::BorrowMut;
 use std::cmp::max;
 use std::collections::HashSet;
-use std::fs::read;
+use std::fs::{File, OpenOptions, read};
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{mem, ptr};
+use std::env::temp_dir;
+use std::io::ErrorKind;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
+use std::path::{Path, PathBuf};
 use winapi::shared::basetsd::SIZE_T;
 use winapi::shared::minwindef::{BOOL, DWORD, FALSE, LPCVOID, LPVOID, PBOOL, PDWORD};
 use winapi::shared::ntdef::HANDLE;
@@ -29,10 +34,7 @@ use winapi::um::tlhelp32::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, Process32FirstW, Process32NextW,
     MODULEENTRY32W, PROCESSENTRY32W, TH32CS_SNAPMODULE, TH32CS_SNAPMODULE32, TH32CS_SNAPPROCESS,
 };
-use winapi::um::winnt::{
-    MEMORY_BASIC_INFORMATION, MEMORY_BASIC_INFORMATION64, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
-    PAGE_READWRITE, PMEMORY_BASIC_INFORMATION, PMEMORY_BASIC_INFORMATION64, PROCESS_ALL_ACCESS,
-};
+use winapi::um::winnt::{MEMORY_BASIC_INFORMATION, MEMORY_BASIC_INFORMATION64, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, PMEMORY_BASIC_INFORMATION, PMEMORY_BASIC_INFORMATION64, PROCESS_ALL_ACCESS, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_SHARE_DELETE, FILE_ATTRIBUTE_TEMPORARY};
 use winapi::um::wow64apiset::IsWow64Process;
 
 #[derive(Debug, Clone)]
@@ -440,14 +442,6 @@ impl Process {
     }
 }
 
-fn safe_add(a: usize, b: usize) -> Result<usize> {
-    a.checked_add(b).ok_or(anyhow!("Overflow"))
-}
-
-fn safe_sub(a: usize, b: usize) -> Result<usize> {
-    a.checked_sub(b).ok_or(anyhow!("Overflow"))
-}
-
 impl Drop for Process {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -478,37 +472,41 @@ pub struct ShareMemMqMeta {
 
 impl<'a> ShareMemMq<'a> {
     pub fn open_or_new(name: &str, size: usize) -> Result<Self> {
-        let mut lock = Mutex::acquire(name)?;
-        let full_name = format!("{}", name);
-        let buf_size = std::mem::size_of::<ShareMemMqMeta>() + size;
-        let is_new;
-        let file = unsafe {
-            let test_handle =
-                OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, full_name.as_ptr() as *mut u16);
-            if test_handle.is_null() {
-                is_new = true;
-                CreateFileMappingW(
-                    INVALID_HANDLE_VALUE,
-                    std::ptr::null_mut(),
-                    PAGE_READWRITE,
-                    0,
-                    buf_size as DWORD,
-                    full_name.as_ptr() as *mut u16,
-                )
-            } else {
-                is_new = false;
-                test_handle
-            }
+        let file_path = temp_dir().join(name);
+        let is_new = !file_path.exists();
+        let persistent_file = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .create_new(is_new)
+            .attributes(FILE_ATTRIBUTE_TEMPORARY)
+            .open(&file_path)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => return Err(ShMemQError::FileExists(file_path).into()) ,
+            Err(e) => return Err(ShMemQError::CreateFile(file_path,e.raw_os_error().unwrap() as _).into()),
         };
-        if file.is_null() {
-            return Err(ProcessError::CreateFileMapping(full_name.clone()).into());
+
+        let buf_size = std::mem::size_of::<ShareMemMqMeta>() + size;
+        let map_file = unsafe {
+            CreateFileMappingW(
+                persistent_file.as_raw_handle() as _,
+                std::ptr::null_mut(),
+                PAGE_READWRITE,
+                0,
+                buf_size as DWORD,
+                name.as_ptr() as *mut u16,
+            )
+        };
+        if map_file.is_null() {
+            return Err(ShMemQError::CreateFileMapping(file_path).into());
         }
 
-        let buf = unsafe { MapViewOfFile(file, FILE_MAP_ALL_ACCESS, 0, 0, buf_size as SIZE_T) };
+        let buf = unsafe { MapViewOfFile(map_file, FILE_MAP_ALL_ACCESS, 0, 0, buf_size as SIZE_T) };
 
         if buf.is_null() {
-            unsafe { CloseHandle(file) };
-            return Err(ProcessError::CreateFileMapping(full_name.clone()).into());
+            unsafe { CloseHandle(map_file) };
+            return Err(ShMemQError::CreateFileMapping(file_path.clone()).into());
         }
 
         let meta = unsafe { &mut *buf.cast::<ShareMemMqMeta>() };
@@ -518,34 +516,31 @@ impl<'a> ShareMemMq<'a> {
             meta.r_index = 0;
             meta.w_index = 0;
         }
+
         let data_ptr = unsafe { buf.cast::<u8>().add(std::mem::size_of::<ShareMemMqMeta>()) };
         let data = unsafe {
             &mut *std::ptr::slice_from_raw_parts_mut(&mut *data_ptr, meta.size - meta.head_size)
         };
-        lock.release();
         Ok(Self {
-            name: full_name.clone(),
+            name: name.to_string(),
             meta,
-            map: file,
+            map: map_file,
             buf,
             data,
         })
     }
 
     pub fn peek(&self) -> Option<&[u8]> {
-        let mut lock = Mutex::acquire(self.name.as_str()).ok()?;
         let data_size = self.meta.size - self.meta.head_size;
         let remain_read_bytes = self.meta.w_index - self.meta.r_index;
         if self.meta.r_index == self.meta.w_index || remain_read_bytes <= std::mem::size_of::<u16>()
         {
-            lock.release();
             None
         } else {
             unsafe {
                 let ptr_to_el = self.data.as_ptr().add(self.meta.r_index % data_size) as *const u16;
                 let el_size = ptr_to_el.read();
                 if (el_size as usize) > remain_read_bytes {
-                    lock.release();
                     None
                 } else {
                     let ptr = self
@@ -553,7 +548,6 @@ impl<'a> ShareMemMq<'a> {
                         .as_ptr()
                         .add((self.meta.r_index % data_size) + std::mem::size_of::<u16>())
                         as *mut u8;
-                    lock.release();
                     Some(&mut *std::ptr::slice_from_raw_parts_mut(
                         ptr,
                         el_size as usize - std::mem::size_of::<u16>(),
@@ -564,7 +558,6 @@ impl<'a> ShareMemMq<'a> {
     }
 
     pub fn dequeue(&mut self) -> Result<Vec<Vec<u8>>> {
-        let mut lock = Mutex::acquire(self.name.as_str())?;
         let data_size = self.meta.size - self.meta.head_size;
         let mut remain_read_bytes = self.meta.w_index - self.meta.r_index;
         let mut result = Vec::new();
@@ -577,7 +570,7 @@ impl<'a> ShareMemMq<'a> {
                 if (el_size as usize) > remain_read_bytes
                     || (el_size as usize <= std::mem::size_of::<u16>())
                 {
-                    return Err(ProcessError::InvalidShareMemMq.into());
+                    return Err(ShMemQError::InvalidMq.into());
                 } else {
                     let ptr = self
                         .data
@@ -594,12 +587,10 @@ impl<'a> ShareMemMq<'a> {
             }
             remain_read_bytes = self.meta.w_index - self.meta.r_index;
         }
-        lock.release();
         Ok(result)
     }
 
     pub fn enqueue(&mut self, elements: &[Vec<u8>]) -> Result<()> {
-        let mut lock = Mutex::acquire(self.name.as_str())?;
         let data_size = self.meta.size - self.meta.head_size;
         let remain_bytes = self.meta.size - (self.meta.w_index - self.meta.r_index);
         let mut size_of = 0;
@@ -607,7 +598,7 @@ impl<'a> ShareMemMq<'a> {
             size_of += el.len() + std::mem::size_of::<u16>();
         }
         if size_of > remain_bytes {
-            return Err(ProcessError::ShareMemMqHasFull.into());
+            return Err(ShMemQError::HasFull.into());
         }
         for el in elements {
             let idx = self.meta.w_index % data_size;
@@ -620,8 +611,11 @@ impl<'a> ShareMemMq<'a> {
                 self.meta.w_index = self.meta.w_index + el.len() + std::mem::size_of::<u16>();
             }
         }
-        lock.release();
         Ok(())
+    }
+
+    fn temp_file_path<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        std::env::temp_dir().join(path)
     }
 }
 

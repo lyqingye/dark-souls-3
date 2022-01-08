@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -22,10 +23,26 @@ pub enum ProcessError {
         #[from]
         source: std::io::Error,
     },
+}
 
-    #[error("Invalid Share Memory Message Queue")]
-    InvalidShareMemMq,
+#[derive(Error, Debug)]
+pub enum ShMemQError {
+
+    #[error("Failed to create share memory queue!")]
+    CreateShMemQ,
+
+    #[error("Failed to file: {0} {1}")]
+    CreateFile(PathBuf,u32),
+
+    #[error("File Already exists: {0}")]
+    FileExists(PathBuf),
+
+    #[error("Failed To Create File Mapping Name: {0}")]
+    CreateFileMapping(PathBuf),
 
     #[error("Share Memory Message Queue Has Full")]
-    ShareMemMqHasFull,
+    HasFull,
+
+    #[error("Invalid Share Memory Message Queue")]
+    InvalidMq,
 }

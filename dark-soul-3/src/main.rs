@@ -53,12 +53,28 @@ fn to_ptr<T>(address: usize) -> *const T {
 }
 
 fn main() {
-    let now = std::time::Instant::now();
-    let ps = core::process::Process::from_name("DarkSoulsIII.exe").unwrap();
-    let value: usize = 100;
-    let module = ps.get_module("DarkSoulsIII.exe").unwrap();
-    let result = ps.pattern_search3(module.base, module.size,&value,false).unwrap();
-    println!("{:?}",result);
+    let mut mq = core::sync::Mutex::new("mq",core::process::ShareMemMq::open_or_new("ToolsBox", 1024 * 1024 * 16).unwrap()).unwrap();
+    println!("open file success");
+    loop {
+        let mut data = mq.acquire().unwrap();
+        if let Ok(msgs) = data.dequeue() {
+            for msg in &msgs {
+                unsafe {
+                    let mut buffer: [u8;4] = [0u8;4];
+                    buffer.copy_from_slice(msg.as_slice());
+                    let value = u32::from_le_bytes(buffer);
+                    println!("{:?}",value);
+                }
+            }
+        }
+    }
+    println!("")
+    // let now = std::time::Instant::now();
+    // let ps = core::process::Process::from_name("DarkSoulsIII.exe").unwrap();
+    // let value: usize = 100;
+    // let module = ps.get_module("DarkSoulsIII.exe").unwrap();
+    // let result = ps.pattern_search3(module.base, module.size,&value,false).unwrap();
+    // println!("{:?}",result);
     // let xxx = ps.fast_rtti_dump("DarkSoulsIII.exe").unwrap();
     // for el in &xxx {
     //     println!("{:?}", el);
@@ -191,7 +207,7 @@ fn main() {
     //     // println!("{}",pool.active_count());
     //     std::thread::sleep_ms(1);
     // }
-    println!("{}ms", now.elapsed().as_millis());
+    // println!("{}ms", now.elapsed().as_millis());
     // println!("{:?}",desc);
 
     // println!("{:?}", ps.get_rtti(0x0007FF4AD045B70).unwrap());
